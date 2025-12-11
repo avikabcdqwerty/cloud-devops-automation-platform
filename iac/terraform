@@ -1,0 +1,347 @@
+# ---------------------------------------------------------------------------
+# Terraform IaC templates for Cloud DevOps Automation Platform
+# Provisions PostgreSQL, VPC, security, and ECS Fargate for FastAPI app
+# ---------------------------------------------------------------------------
+
+terraform {
+  required_version = ">= 1.6.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.5"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+# -------------------------
+# Variables
+# -------------------------
+variable "aws_region" {
+  description = "AWS region to deploy resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "project_name" {
+  description = "Project name for resource naming"
+  type        = string
+  default     = "cloud-devops-platform"
+}
+
+variable "db_username" {
+  description = "PostgreSQL master username"
+  type        = string
+  default     = "postgres"
+}
+
+variable "db_password" {
+  description = "PostgreSQL master password"
+  type        = string
+  sensitive   = true
+}
+
+variable "db_allocated_storage" {
+  description = "PostgreSQL storage (GB)"
+  type        = number
+  default     = 20
+}
+
+variable "db_instance_class" {
+  description = "PostgreSQL instance class"
+  type        = string
+  default     = "db.t4g.micro"
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+# -------------------------
+# Random password for DB if not provided
+# -------------------------
+resource "random_password" "db_password" {
+  length  = 16
+  special = true
+  override_characters = "!@#%^*()-_=+"
+}
+
+locals {
+  db_password_final = var.db_password != "" ? var.db_password : random_password.db_password.result
+}
+
+# -------------------------
+# VPC and Networking
+# -------------------------
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = {
+    Name = "${var.project_name}-vpc"
+  }
+}
+
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, 1)
+  map_public_ip_on_launch = true
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  tags = {
+    Name = "${var.project_name}-public-subnet"
+  }
+}
+
+resource "aws_subnet" "private" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 2)
+  availability_zone = data.aws_availability_zones.available.names[0]
+  tags = {
+    Name = "${var.project_name}-private-subnet"
+  }
+}
+
+data "aws_availability_zones" "available" {}
+
+resource "aws_internet_gateway" "gw" {
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name = "${var.project_name}-igw"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name = "${var.project_name}-public-rt"
+  }
+}
+
+resource "aws_route" "internet_access" {
+  route_table_id         = aws_route_table.public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.gw.id
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+# -------------------------
+# Security Groups
+# -------------------------
+resource "aws_security_group" "db" {
+  name        = "${var.project_name}-db-sg"
+  description = "Allow DB access from ECS"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [aws_subnet.private.cidr_block]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-db-sg"
+  }
+}
+
+resource "aws_security_group" "ecs" {
+  name        = "${var.project_name}-ecs-sg"
+  description = "Allow HTTP access to ECS"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 8000
+    to_port     = 8000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-ecs-sg"
+  }
+}
+
+# -------------------------
+# RDS PostgreSQL
+# -------------------------
+resource "aws_db_subnet_group" "main" {
+  name       = "${var.project_name}-db-subnet-group"
+  subnet_ids = [aws_subnet.private.id]
+  tags = {
+    Name = "${var.project_name}-db-subnet-group"
+  }
+}
+
+resource "aws_db_instance" "postgres" {
+  identifier              = "${var.project_name}-postgres"
+  allocated_storage       = var.db_allocated_storage
+  engine                  = "postgres"
+  engine_version          = "15.5"
+  instance_class          = var.db_instance_class
+  name                    = "cloud_devops_db"
+  username                = var.db_username
+  password                = local.db_password_final
+  db_subnet_group_name    = aws_db_subnet_group.main.name
+  vpc_security_group_ids  = [aws_security_group.db.id]
+  skip_final_snapshot     = true
+  publicly_accessible     = false
+  storage_encrypted       = true
+  backup_retention_period = 7
+  multi_az                = false
+  auto_minor_version_upgrade = true
+  deletion_protection     = false
+  tags = {
+    Name = "${var.project_name}-postgres"
+  }
+}
+
+# -------------------------
+# ECS Fargate for FastAPI app
+# -------------------------
+resource "aws_ecs_cluster" "main" {
+  name = "${var.project_name}-ecs-cluster"
+  tags = {
+    Name = "${var.project_name}-ecs-cluster"
+  }
+}
+
+resource "aws_ecs_task_definition" "api" {
+  family                   = "${var.project_name}-api"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+  container_definitions    = jsonencode([
+    {
+      name      = "api"
+      image     = "REPLACE_WITH_ECR_IMAGE_URI"
+      portMappings = [
+        {
+          containerPort = 8000
+          protocol      = "tcp"
+        }
+      ]
+      environment = [
+        { name = "POSTGRES_USER", value = var.db_username },
+        { name = "POSTGRES_PASSWORD", value = local.db_password_final },
+        { name = "POSTGRES_HOST", value = aws_db_instance.postgres.address },
+        { name = "POSTGRES_PORT", value = "5432" },
+        { name = "POSTGRES_DB", value = "cloud_devops_db" }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = "/ecs/${var.project_name}-api"
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+    }
+  ])
+  tags = {
+    Name = "${var.project_name}-api-task"
+  }
+}
+
+resource "aws_iam_role" "ecs_task_execution" {
+  name = "${var.project_name}-ecs-task-execution-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_assume_role.json
+  tags = {
+    Name = "${var.project_name}-ecs-task-execution-role"
+  }
+}
+
+data "aws_iam_policy_document" "ecs_task_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_policy" {
+  role       = aws_iam_role.ecs_task_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_cloudwatch_log_group" "ecs_api" {
+  name              = "/ecs/${var.project_name}-api"
+  retention_in_days = 14
+}
+
+resource "aws_ecs_service" "api" {
+  name            = "${var.project_name}-api-service"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.api.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+  network_configuration {
+    subnets          = [aws_subnet.public.id]
+    security_groups  = [aws_security_group.ecs.id]
+    assign_public_ip = true
+  }
+  depends_on = [aws_db_instance.postgres]
+  tags = {
+    Name = "${var.project_name}-api-service"
+  }
+}
+
+# -------------------------
+# Outputs
+# -------------------------
+output "db_endpoint" {
+  description = "PostgreSQL endpoint"
+  value       = aws_db_instance.postgres.address
+  sensitive   = true
+}
+
+output "ecs_service_url" {
+  description = "Public URL for FastAPI service (if behind ALB, add ALB resource)"
+  value       = "http://${aws_ecs_service.api.network_configuration[0].assign_public_ip ? aws_ecs_service.api.id : "N/A"}:8000"
+}
+
+output "db_password" {
+  description = "Database password (if generated)"
+  value       = local.db_password_final
+  sensitive   = true
+}
+
+# -------------------------
+# Notes
+# -------------------------
+# - Replace REPLACE_WITH_ECR_IMAGE_URI with your built Docker image in ECR.
+# - For production, add an Application Load Balancer and HTTPS.
+# - All resources are tagged for traceability and compliance.
+# - All logs are sent to CloudWatch for audit and monitoring.
+# - Security groups restrict access to only necessary ports.
+# - All sensitive outputs are marked as sensitive.

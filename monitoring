@@ -1,0 +1,144 @@
+# monitoring/cloudwatch-alarms.yml
+# AWS CloudWatch Alarms for Cloud DevOps Automation Platform
+
+Resources:
+  ApiCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "API-CPU-High"
+      AlarmDescription: "Alarm when ECS API CPU exceeds 80% for 5 minutes"
+      Namespace: "AWS/ECS"
+      MetricName: "CPUUtilization"
+      Dimensions:
+        - Name: ClusterName
+          Value: cloud-devops-platform-ecs-cluster
+        - Name: ServiceName
+          Value: cloud-devops-platform-api-service
+      Statistic: "Average"
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 80
+      ComparisonOperator: "GreaterThanThreshold"
+      TreatMissingData: "missing"
+      ActionsEnabled: true
+      AlarmActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+      OKActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+
+  ApiMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "API-Memory-High"
+      AlarmDescription: "Alarm when ECS API Memory exceeds 80% for 5 minutes"
+      Namespace: "AWS/ECS"
+      MetricName: "MemoryUtilization"
+      Dimensions:
+        - Name: ClusterName
+          Value: cloud-devops-platform-ecs-cluster
+        - Name: ServiceName
+          Value: cloud-devops-platform-api-service
+      Statistic: "Average"
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 80
+      ComparisonOperator: "GreaterThanThreshold"
+      TreatMissingData: "missing"
+      ActionsEnabled: true
+      AlarmActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+      OKActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+
+  ApiUnhealthyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "API-Task-Unhealthy"
+      AlarmDescription: "Alarm when ECS API unhealthy task count > 0"
+      Namespace: "AWS/ECS"
+      MetricName: "UnhealthyTaskCount"
+      Dimensions:
+        - Name: ClusterName
+          Value: cloud-devops-platform-ecs-cluster
+        - Name: ServiceName
+          Value: cloud-devops-platform-api-service
+      Statistic: "Maximum"
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: "GreaterThanThreshold"
+      TreatMissingData: "notBreaching"
+      ActionsEnabled: true
+      AlarmActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+      OKActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+
+  DbConnectionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "DB-Connections-High"
+      AlarmDescription: "Alarm when PostgreSQL DB connections exceed 90% of max"
+      Namespace: "AWS/RDS"
+      MetricName: "DatabaseConnections"
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: cloud-devops-platform-postgres
+      Statistic: "Average"
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 90
+      ComparisonOperator: "GreaterThanThreshold"
+      TreatMissingData: "missing"
+      ActionsEnabled: true
+      AlarmActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+      OKActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+
+  DbCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "DB-CPU-High"
+      AlarmDescription: "Alarm when PostgreSQL DB CPU exceeds 80% for 5 minutes"
+      Namespace: "AWS/RDS"
+      MetricName: "CPUUtilization"
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: cloud-devops-platform-postgres
+      Statistic: "Average"
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 80
+      ComparisonOperator: "GreaterThanThreshold"
+      TreatMissingData: "missing"
+      ActionsEnabled: true
+      AlarmActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+      OKActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+
+  ApiSecurityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "API-Security-Anomaly"
+      AlarmDescription: "Alarm on security anomaly detected in API logs"
+      Namespace: "CloudDevOps/Security"
+      MetricName: "SecurityAnomalyCount"
+      Statistic: "Sum"
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      TreatMissingData: "notBreaching"
+      ActionsEnabled: true
+      AlarmActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+      OKActions:
+        - arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts
+
+# Notes:
+# - Replace arn:aws:sns:us-east-1:123456789012:cloud-devops-alerts with your SNS topic ARN for notifications.
+# - All alarms send notifications within 5 minutes of threshold breach.
+# - Security anomaly metric should be published by the API or monitoring agent.
+# - All logs and alarms are retained for audit and compliance.
